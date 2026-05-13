@@ -95,7 +95,9 @@ def instantly_reply():
         create_task(sf, lead["Id"], intent, reply_date)
         print(f"Done — {intent}")
     except Exception as e:
+        import traceback
         print(f"Error: {e}")
+        print(traceback.format_exc())
     return jsonify({"received": True})
 
 @app.route("/health")
