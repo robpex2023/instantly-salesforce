@@ -93,6 +93,8 @@ def create_task(sf, lead_id, intent):
 @app.route("/webhook/instantly-reply", methods=["POST"])
 def instantly_reply():
     payload = request.json or {}
+    print(f"Received payload keys: {list(payload.keys())}")
+    print(f"Full payload: {payload}")
 
     from_email = payload.get("from_address") or payload.get("reply_from_email") or payload.get("from_address_email", "")
     subject    = payload.get("subject")    or payload.get("email_subject", "") or ""
