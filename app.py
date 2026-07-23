@@ -30,69 +30,51 @@ def get_sf():
 
 
 # -----------------------------
-# Reply Classification
+# Classify Reply
 # -----------------------------
 
 def classify_intent(subject, body):
 
-    text = (str(subject) + " " + str(body)).lower()
+    text = f"{subject} {body}".lower()
 
-    if re.search(r"\b(interested|tell me more|sounds good|yes|let'?s chat|book|schedule|call me|demo)\b", text):
+    if re.search(r"\b(interested|tell me more|sounds good|yes|schedule|book|call)\b", text):
         return "Interested"
 
-    if re.search(r"\b(not interested|unsubscribe|remove me|no thanks|opt.?out|stop emailing)\b", text):
+    if re.search(r"\b(not interested|unsubscribe|remove me|stop emailing)\b", text):
         return "Not Interested"
 
-    if re.search(r"\b(out of office|ooo|on vacation|annual leave|away until|back on|returning)\b", text):
+    if re.search(r"\b(out of office|ooo|vacation|away)\b", text):
         return "Out of Office"
 
-    if re.search(r"\b(refer|referred|talk to|reach out to|contact my|colleague|passed you on)\b", text):
-        return "Referral"
-
-    if re.search(r"\b(question|wondering|clarif|more info|can you|could you|how does)\b", text):
+    if re.search(r"\b(question|can you|could you|more info)\b", text):
         return "Question"
 
     return "General Reply"
 
 
-# -----------------------------
-# Task Rules
-# -----------------------------
-
 TASK_CONFIG = {
-
     "Interested": {
         "subject": "Interested reply - book a call",
         "priority": "High",
         "days": 1
     },
-
     "Not Interested": {
-        "subject": "Mark lead as closed - not interested",
+        "subject": "Not interested - review lead",
         "priority": "Normal",
         "days": 3
     },
-
     "Out of Office": {
-        "subject": "Follow up when back from OOO",
+        "subject": "Follow up after OOO",
         "priority": "Normal",
         "days": 7
     },
-
-    "Referral": {
-        "subject": "Referral received - create new lead",
-        "priority": "High",
-        "days": 1
-    },
-
     "Question": {
-        "subject": "Reply with question - respond today",
+        "subject": "Reply with requested information",
         "priority": "High",
         "days": 1
     },
-
     "General Reply": {
-        "subject": "New reply - review and respond",
+        "subject": "Review new Instantly reply",
         "priority": "Normal",
         "days": 2
     }
@@ -100,118 +82,84 @@ TASK_CONFIG = {
 
 
 # -----------------------------
-# Find Lead
+# Find Salesforce Lead
 # -----------------------------
 
 def find_lead(sf, email):
 
-    try:
+    print(f"Searching Salesforce for: {email}", flush=True)
 
-        email = email.replace("'", "\\'")
+    query = f"""
+    SELECT Id, Name
+    FROM Lead
+    WHERE IsConverted = false
+    AND Email = '{email}'
+    LIMIT 1
+    """
 
-        query = f"""
-            SELECT Id, Name
-            FROM Lead
-            WHERE IsConverted = false
-            AND (
-                Email = '{email}'
-                OR Email_2__c = '{email}'
-                OR Updated_Email__c = '{email}'
-                OR Updated_Email_2__c = '{email}'
-                OR Updated_Email_3__c = '{email}'
-            )
-            LIMIT 1
-        """
+    result = sf.query(query)
 
-        result = sf.query(query)
+    records = result.get("records", [])
 
-        records = result.get("records", [])
+    if records:
+        print(f"Found Lead: {records[0]['Name']}", flush=True)
+        return records[0]
 
-        return records[0] if records else None
+    print("No Salesforce Lead Found", flush=True)
 
-    except Exception as e:
-
-        print(f"Lead lookup error: {e}")
-
-        return None
-
+    return None
 
 
 # -----------------------------
-# Log Incoming Reply
+# Log Email Reply
 # -----------------------------
 
-def log_reply_email(sf, lead_id, from_email, subject, body):
+def create_email(sf, lead_id, sender, subject, body):
 
     try:
 
         sf.EmailMessage.create({
 
             "ParentId": lead_id,
-
             "Incoming": True,
-
-            "FromAddress": from_email,
-
+            "FromAddress": sender,
             "Subject": subject,
-
             "TextBody": body,
-
             "Status": "0"
 
         })
 
-        print("EmailMessage created")
+        print("EmailMessage created", flush=True)
 
-    except Exception as e:
+    except Exception:
 
-        print(f"EmailMessage error: {e}")
-
+        print("EmailMessage failed", flush=True)
+        traceback.print_exc()
 
 
 # -----------------------------
-# Create Follow-up Task
+# Create Task
 # -----------------------------
 
 def create_task(sf, lead_id, intent):
 
-    config = TASK_CONFIG.get(
-        intent,
-        TASK_CONFIG["General Reply"]
-    )
+    config = TASK_CONFIG[intent]
 
-    due_date = date.today() + timedelta(
-        days=config["days"]
-    )
-
+    due = date.today() + timedelta(days=config["days"])
 
     sf.Task.create({
 
         "WhoId": lead_id,
-
         "Subject": config["subject"],
-
         "Priority": config["priority"],
-
         "Status": "Not Started",
-
-        "ActivityDate": due_date.strftime("%Y-%m-%d"),
-
-        "Description":
-            f"""
-            Auto-created from Instantly reply.
-
-            Reply Intent:
-            {intent}
-            """,
-
-        "OwnerId": os.getenv("SF_OWNER_ID")
+        "ActivityDate": due.strftime("%Y-%m-%d"),
+        "OwnerId": os.getenv("SF_OWNER_ID"),
+        "Description": f"Created automatically from Instantly reply. Intent: {intent}"
 
     })
 
-
-    print("Follow-up task created")
-
+    print("Task created", flush=True)
 
 
 # -----------------------------
@@ -219,138 +167,94 @@ def create_task(sf, lead_id, intent):
 # -----------------------------
 
 @app.route("/webhook/instantly-reply", methods=["POST"])
-
 def instantly_reply():
 
-    payload = request.json or {}
+    payload = request.get_json(force=True, silent=True) or {}
+
+    print("====================", flush=True)
+    print("INSTANTLY REPLY RECEIVED", flush=True)
+    print(payload, flush=True)
+    print("====================", flush=True)
 
 
-    print("====================")
-    print("Instantly Reply Received")
-    print(payload)
-    print("====================")
-
-
-    from_email = (
-
+    sender = (
         payload.get("from_address")
+        or payload.get("from_email")
         or payload.get("reply_from_email")
-        or payload.get("from_address_email")
+        or payload.get("email")
         or ""
-
     )
 
 
     subject = (
-
         payload.get("subject")
         or payload.get("email_subject")
         or ""
-
-    )
-
-
-    body_raw = (
-
-        payload.get("body_text")
-        or payload.get("reply_body")
-        or payload.get("body")
-        or ""
-
     )
 
 
     body = (
-
-        body_raw.get("text", "")
-        if isinstance(body_raw, dict)
-        else body_raw
-
+        payload.get("body_text")
+        or payload.get("reply_body")
+        or payload.get("text")
+        or payload.get("body")
+        or ""
     )
 
 
-    if not from_email:
-
-        print("No sender email found")
-
-        return jsonify({
-            "received": True
-        })
+    if isinstance(body, dict):
+        body = body.get("text", "")
 
 
+    if not sender:
 
-    intent = classify_intent(
-        subject,
-        body
-    )
+        print("NO EMAIL FOUND IN PAYLOAD", flush=True)
 
+        return jsonify({"received": True})
+
+
+    intent = classify_intent(subject, body)
 
     print(
-        f"{from_email} classified as {intent}"
+        f"{sender} classified as {intent}",
+        flush=True
     )
-
 
 
     try:
 
         sf = get_sf()
 
-
-        lead = find_lead(
-            sf,
-            from_email
-        )
-
+        lead = find_lead(sf, sender)
 
         if not lead:
 
-            print(
-                f"No Salesforce Lead found for {from_email}"
-            )
-
-            return jsonify({
-                "received": True
-            })
+            return jsonify({"received": True})
 
 
-        lead_id = lead["Id"]
-
-
-
-        # Log the actual reply
-
-        log_reply_email(
+        create_email(
             sf,
-            lead_id,
-            from_email,
+            lead["Id"],
+            sender,
             subject,
             body
         )
 
 
-
-        # Create follow-up task
-
         create_task(
             sf,
-            lead_id,
+            lead["Id"],
             intent
         )
 
 
-        print(
-            "Automation complete"
-        )
+        print("COMPLETE", flush=True)
 
 
-    except Exception as e:
+    except Exception:
 
-        print(
-            f"ERROR: {e}"
-        )
-
+        print("MAIN ERROR", flush=True)
         traceback.print_exc()
-
 
 
     return jsonify({
@@ -358,13 +262,11 @@ def instantly_reply():
     })
 
 
-
 # -----------------------------
 # Health Check
 # -----------------------------
 
 @app.route("/health")
-
 def health():
 
     return jsonify({
@@ -372,11 +274,9 @@ def health():
     })
 
 
-
 if __name__ == "__main__":
 
     app.run(
         host="0.0.0.0",
-        port=5000,
-        debug=False
+        port=5000
     )
